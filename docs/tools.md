@@ -217,7 +217,7 @@ python3 tools/validate/validate.py [--evidence PATH] [-q] [--format {text,json}]
 ### Options
 
 - `-h`, `--help`: show this help message and exit
-- `--evidence PATH`: a verification record file, or a directory of *.json records (CF-04); may be given more than once
+- `--evidence PATH`: a verification record file, or a directory of *.json records (CF-04); may be given more than once. A record whose `checkedAt` is later than the current time is rejected, with a five-minute tolerance for clock skew between the verifier's machine and the validator's
 - `-q`, `--quiet`: suppress warning output in the text format; errors and the final OK/FAILED summary are still printed (JSON output is unaffected)
 - `--format {text,json}`: output format: 'text' (default) is the human-readable report; 'json' prints one structured JSON document on stdout and nothing on stderr
 

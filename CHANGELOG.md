@@ -398,6 +398,30 @@ discussion and diff. New entries must include that link; see
   `tools/validate/schema_sync.py` reports no drift. Closes
   [issue #398](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/398).
   ([PR #433])
+- `tools/validate/validate.py` now rejects a verification record whose `checkedAt` is in
+  the future. The instant was checked for being a real RFC 3339 UTC value, but never
+  compared with the clock, so a record dated 2099 was accepted and — because the
+  freshness states of CF-04 section 4 are derived from `checkedAt` — would look
+  "verified" for 73 years, and a record dated tomorrow could never go stale on
+  schedule. `validate_evidence()` and `validate_evidence_file()` take an optional
+  timezone-aware `now`; when it is not given, the current time is read once per run and
+  the same instant is used for every record, so one run cannot judge two records
+  against two clocks. A record may be up to five minutes ahead of the validator's
+  clock, the documented tolerance for skew between the verifier's machine and the
+  validator's. A malformed `checkedAt` still produces only the existing format
+  message, and `capturedAt` in the Protocol 29 captures is unchanged. Closes
+  [issue #397](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/397).
+  ([PR #432])
+- `tools/coverage/report.py --validator PATH` now reports a validator copy it cannot
+  use as one error line naming the path and the reason, and exits 1, instead of
+  dying with an internal `AssertionError` traceback. A file that is not Python, a
+  file with a syntax error, a module that raises while it is executed, and a module
+  that lacks the attributes and capability constants the report reads are all
+  rejected this way; a valid copy and the default behaviour are unchanged, and the
+  text and `--format json` reports of a normal run are byte-identical to before.
+  Closes
+  [issue #393](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/393).
+  ([PR #431])
 
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
@@ -619,3 +643,5 @@ discussion and diff. New entries must include that link; see
 [PR #380]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/380
 [PR #381]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/381
 [PR #433]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/433
+[PR #432]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/432
+[PR #431]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/431
