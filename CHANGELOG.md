@@ -396,7 +396,7 @@ discussion and diff. New entries must include that link; see
   validator's. A malformed `checkedAt` still produces only the existing format
   message, and `capturedAt` in the Protocol 29 captures is unchanged. Closes
   [issue #397](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/397).
-  ([PR #XXX])
+  ([PR #432])
 
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
@@ -617,3 +617,4 @@ discussion and diff. New entries must include that link; see
 [#354]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/354
 [PR #380]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/380
 [PR #381]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/381
+[PR #432]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/432
