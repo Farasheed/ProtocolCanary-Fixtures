@@ -397,7 +397,7 @@ discussion and diff. New entries must include that link; see
   schema cannot express — like the other rules the validator enforces — and
   `tools/validate/schema_sync.py` reports no drift. Closes
   [issue #398](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/398).
-  ([PR #XXX])
+  ([PR #433])
 
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
@@ -618,3 +618,4 @@ discussion and diff. New entries must include that link; see
 [#354]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/354
 [PR #380]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/380
 [PR #381]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/381
+[PR #433]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/433
