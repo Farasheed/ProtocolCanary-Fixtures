@@ -392,7 +392,7 @@ discussion and diff. New entries must include that link; see
   text and `--format json` reports of a normal run are byte-identical to before.
   Closes
   [issue #393](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/393).
-  ([PR #XXX])
+  ([PR #431])
 
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
@@ -613,3 +613,4 @@ discussion and diff. New entries must include that link; see
 [#354]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/354
 [PR #380]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/380
 [PR #381]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/381
+[PR #431]: https://github.com/StellarCanary/ProtocolCanary-Fixtures/pull/431
