@@ -81,7 +81,10 @@ discussion and diff. New entries must include that link; see
   files) at `stellar/stellar-xdr` v28.0 (commit `9c9c145`) with file and line ranges. All
   eight pass the engine offline (`stellar-canary 0.2.0`, `Protocol-Canary` commit
   `bc13306`): the four roundtrips byte-for-byte, the four decode-failures because the
-  engine rejects the value. Closes
+  engine rejects the value. Eight CF-04 structural verification records were added for
+  the new fixtures with `tools/evidence/record_structural.py`, and the pack's records
+  were regenerated, so `protocol-28/evidence/records/` holds one record per fixture
+  (31). Closes
   [issue #362](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/362).
   ([PR #434])
 
