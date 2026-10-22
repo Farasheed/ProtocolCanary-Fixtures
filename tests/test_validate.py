@@ -1610,6 +1610,110 @@ field = "error"
         self.assertIn("0 fixture file(s) valid across 1 root(s)", out.getvalue())
 
 
+class ExpectedBase64KindTests(unittest.TestCase):
+    """expected_base64 belongs to an encode-equals fixture only (F-116, #398).
+
+    canary-xdr's loader accepts "kind", "type" and "value_base64" for every
+    other kind and rejects the whole fixture when it finds another key, so
+    a fixture that carries expected_base64 with, say, kind = "roundtrip"
+    used to pass this validator and be refused by the engine.
+    """
+
+    def fixture(self, kind: str, expected: str | None = "AAAAAA==") -> str:
+        text = VALID_XDR.replace('kind = "decode-success"', f'kind = "{kind}"')
+        if expected is not None:
+            text += f'expected_base64 = "{expected}"\n'
+        return text
+
+    def run_validation(self, contents: str) -> "validate.Report":
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, "a.toml", contents)
+            return validate.validate_directory(root)
+
+    def test_every_other_kind_rejects_the_field(self) -> None:
+        for kind in ("roundtrip", "decode-success", "decode-failure"):
+            with self.subTest(kind=kind):
+                report = self.run_validation(self.fixture(kind))
+                self.assertEqual(len(report.errors), 1, report.errors)
+                self.assertIn(
+                    "field 'expected_base64' is only allowed for kind "
+                    f"'encode-equals', not {kind!r}",
+                    report.errors[0],
+                )
+
+    def test_the_error_points_at_the_expected_base64_key(self) -> None:
+        text = self.fixture("roundtrip")
+        report = self.run_validation(text)
+        self.assertEqual(len(report.error_entries), 1, report.errors)
+        self.assertEqual(
+            report.error_entries[0].line, len(text.splitlines()), report.errors
+        )
+
+    def test_an_empty_value_on_another_kind_is_this_error_and_not_a_base64_one(self) -> None:
+        report = self.run_validation(self.fixture("roundtrip", expected=""))
+        self.assertEqual(len(report.errors), 1, report.errors)
+        self.assertIn("only allowed for kind 'encode-equals'", report.errors[0])
+        self.assertNotIn("must not be empty", report.errors[0])
+
+    def test_encode_equals_still_accepts_a_valid_value(self) -> None:
+        report = self.run_validation(self.fixture("encode-equals"))
+        self.assertEqual(report.errors, [])
+
+    def test_encode_equals_still_rejects_an_empty_or_invalid_value(self) -> None:
+        empty = self.run_validation(self.fixture("encode-equals", expected=""))
+        self.assertTrue(
+            any("field 'expected_base64' must not be empty" in e for e in empty.errors),
+            empty.errors,
+        )
+        invalid = self.run_validation(self.fixture("encode-equals", expected="!!!not-base64!!!"))
+        self.assertTrue(
+            any("not valid base64" in e for e in invalid.errors), invalid.errors
+        )
+
+    def test_a_fixture_without_the_field_is_unaffected_for_every_kind(self) -> None:
+        for kind in sorted(validate.XDR_KINDS):
+            with self.subTest(kind=kind):
+                report = self.run_validation(self.fixture(kind, expected=None))
+                if kind == "encode-equals":
+                    # The field is required for this kind: the existing
+                    # missing-field error is unchanged.
+                    self.assertTrue(
+                        any(
+                            "missing required field 'expected_base64'" in e
+                            for e in report.errors
+                        ),
+                        report.errors,
+                    )
+                else:
+                    self.assertEqual(report.errors, [])
+
+    def test_an_unknown_or_missing_kind_reports_only_the_kind_error(self) -> None:
+        unknown = (
+            VALID_XDR.replace('kind = "decode-success"', 'kind = "bogus-kind"')
+            + 'expected_base64 = "AAAAAA=="\n'
+        )
+        report = self.run_validation(unknown)
+        self.assertEqual(len(report.errors), 1, report.errors)
+        self.assertIn("field 'kind' must be one of", report.errors[0])
+
+        missing = (
+            VALID_XDR.replace('kind = "decode-success"\n', "")
+            + 'expected_base64 = "AAAAAA=="\n'
+        )
+        report = self.run_validation(missing)
+        self.assertEqual(len(report.errors), 1, report.errors)
+        self.assertIn("missing required field 'kind'", report.errors[0])
+
+        not_a_string = (
+            VALID_XDR.replace('kind = "decode-success"', "kind = 42")
+            + 'expected_base64 = "AAAAAA=="\n'
+        )
+        report = self.run_validation(not_a_string)
+        self.assertEqual(len(report.errors), 1, report.errors)
+        self.assertIn("field 'kind' must be of type str", report.errors[0])
+
+
 class QuietFlagTests(unittest.TestCase):
     """`--quiet` suppresses warnings while keeping errors and the summary.
 

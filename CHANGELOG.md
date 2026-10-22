@@ -383,6 +383,22 @@ discussion and diff. New entries must include that link; see
 
 ### Changed
 
+- `tools/validate/validate.py` now rejects `expected_base64` on an XDR fixture whose
+  `kind` is not `encode-equals`. The field states the expected encoding, and only an
+  `encode-equals` fixture has one: `canary-xdr`'s loader accepts "kind", "type" and
+  "value_base64" for every other kind and rejects the whole fixture when it finds
+  another key, so a fixture that carried the field with, say, `kind = "roundtrip"` passed
+  this validator and was refused by the engine. The validator now reports `field
+  'expected_base64' is only allowed for kind 'encode-equals', not 'roundtrip'` at the
+  line of the key, once per file, and a fixture whose `kind` is missing, not a string or
+  not a supported kind reports only the kind error. The `encode-equals` behaviour is
+  unchanged: the field is required there, must not be empty and must be valid base64.
+  `schemas/fixture-v1.schema.json` is unchanged, because this is a loader-side rule the
+  schema cannot express — like the other rules the validator enforces — and
+  `tools/validate/schema_sync.py` reports no drift. Closes
+  [issue #398](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/398).
+  ([PR #XXX])
+
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
   entry count, the uncompressed bytes, the version in the file name, the pack name, the

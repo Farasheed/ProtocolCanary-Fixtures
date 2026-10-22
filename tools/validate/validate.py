@@ -989,10 +989,14 @@ def validate_xdr_body(fx: Fixture, report: Report) -> None:
         )
 
     ok_kind = _require(data, "kind", str, path, report)
-    if ok_kind and data["kind"] not in XDR_KINDS:
+    kind = data.get("kind") if ok_kind else None
+    # A kind the engine does not support is reported once, by the check
+    # below; no rule that depends on the kind can be applied to it.
+    supported_kind = ok_kind and kind in XDR_KINDS
+    if ok_kind and not supported_kind:
         report.error(
             path,
-            f"field 'kind' must be one of {sorted(XDR_KINDS)}, got {data['kind']!r}",
+            f"field 'kind' must be one of {sorted(XDR_KINDS)}, got {kind!r}",
             line=_field_line(path, "kind"),
         )
 
@@ -1005,7 +1009,10 @@ def validate_xdr_body(fx: Fixture, report: Report) -> None:
             )
         _validate_base64(data["value_base64"], "value_base64", path, report)
 
-    if (ok_kind and data["kind"] == "encode-equals") or "expected_base64" in data:
+    if supported_kind and kind == "encode-equals":
+        # For this kind the expected encoding is the point of the fixture,
+        # so the field is required and must be a non-empty, valid base64
+        # string.
         if _require(data, "expected_base64", str, path, report):
             if not data["expected_base64"]:
                 report.error(
@@ -1014,6 +1021,19 @@ def validate_xdr_body(fx: Fixture, report: Report) -> None:
                     line=_field_line(path, "expected_base64"),
                 )
             _validate_base64(data["expected_base64"], "expected_base64", path, report)
+    elif supported_kind and "expected_base64" in data:
+        # canary-xdr's loader accepts "kind", "type" and "value_base64" for
+        # every other kind and rejects the whole fixture when it finds
+        # another key, so a fixture with expected_base64 and, say,
+        # kind = "roundtrip" passes this validator but is refused by the
+        # engine. The rule is enforced here so the two agree (F-116,
+        # issue #398).
+        report.error(
+            path,
+            f"field 'expected_base64' is only allowed for kind 'encode-equals', "
+            f"not {kind!r}",
+            line=_field_line(path, "expected_base64"),
+        )
 
 
 def validate_rpc_body(fx: Fixture, report: Report) -> None:
