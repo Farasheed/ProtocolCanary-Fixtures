@@ -15,6 +15,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -2306,6 +2307,11 @@ class SourceReferenceFormatTests(unittest.TestCase):
 class VerificationEvidenceTests(unittest.TestCase):
     """validate_evidence (F-006, CF-04 sections 3 and 8)."""
 
+    # The clock every record in this class is judged against. It is injected
+    # rather than read from the machine, so the tests never depend on the
+    # date they happen to run on (F-115, issue #397).
+    NOW = datetime(2026, 10, 21, 10, 0, 0, tzinfo=timezone.utc)
+
     LIVE = {
         "verificationVersion": 1,
         "fixtureId": "p28-rpc-network",
@@ -2339,18 +2345,18 @@ class VerificationEvidenceTests(unittest.TestCase):
                 record.pop(key, None)
             else:
                 record[key] = value
-        return validate.validate_evidence(record)
+        return validate.validate_evidence(record, now=self.NOW)
 
     def test_valid_live_and_offline_records_pass(self) -> None:
-        self.assertEqual(validate.validate_evidence(self.LIVE), [])
-        self.assertEqual(validate.validate_evidence(self.OFFLINE), [])
+        self.assertEqual(validate.validate_evidence(self.LIVE, now=self.NOW), [])
+        self.assertEqual(validate.validate_evidence(self.OFFLINE, now=self.NOW), [])
 
     def test_offline_methods_may_carry_null_network_fields(self) -> None:
         record = copy.deepcopy(self.OFFLINE)
         record.update(
             method="source-checked", network=None, endpointHost=None, evidenceRef=None
         )
-        self.assertEqual(validate.validate_evidence(record), [])
+        self.assertEqual(validate.validate_evidence(record, now=self.NOW), [])
 
     def test_a_record_must_be_an_object(self) -> None:
         for bad in ([], "text", 7, None):
@@ -2507,9 +2513,132 @@ class VerificationEvidenceTests(unittest.TestCase):
                 # The validator is at least as strict as the schema: whatever
                 # the schema rejects, it rejects too.
                 if lite.validate(record, schema):
-                    self.assertTrue(validate.validate_evidence(record))
-                if not validate.validate_evidence(record):
+                    self.assertTrue(validate.validate_evidence(record, now=self.NOW))
+                if not validate.validate_evidence(record, now=self.NOW):
                     self.assertEqual(lite.validate(record, schema), [])
+
+
+class FutureCheckedAtTests(unittest.TestCase):
+    """A verification record cannot be dated in the future (F-115, #397).
+
+    A verification is made by a person or a scheduled job that actually
+    ran the step (CF-04 section 3), so a ``checkedAt`` in the future
+    describes a step that has not happened yet. The freshness states of
+    CF-04 section 4 are derived from ``checkedAt``, so a forward-dated
+    record would look "verified" for years.
+    """
+
+    NOW = datetime(2026, 10, 21, 10, 0, 0, tzinfo=timezone.utc)
+
+    def record(self, checked_at: str) -> dict:
+        return {
+            "verificationVersion": 1,
+            "fixtureId": "p28-xdr-example",
+            "fixtureSha256": "0" * 64,
+            "method": "structural",
+            "checkedAt": checked_at,
+            "verifier": {"name": "s", "version": "1"},
+            "outcome": "matched",
+        }
+
+    def problems(self, checked_at: str) -> list[str]:
+        """The problems of one record, judged against the injected clock."""
+        return validate.validate_evidence(self.record(checked_at), now=self.NOW)
+
+    def test_the_table_of_accepted_and_rejected_instants(self) -> None:
+        cases = [
+            # (checkedAt, accepted?)
+            ("2026-10-21T10:00:00Z", True),  # exactly now
+            ("2026-10-21T10:05:00Z", True),  # now + the whole tolerance
+            ("2026-10-21T10:05:01Z", False),  # now + the tolerance + 1 second
+            ("2026-10-21T10:05:00.5Z", False),  # a fraction past the tolerance
+            ("2099-01-01T00:00:00Z", False),  # a mistyped year
+            ("2026-10-21T09:59:59.9Z", True),  # a fraction before now
+            ("2026-10-21T09:59:59Z", True),  # a second before now
+            ("2000-01-01T00:00:00Z", True),  # the CF-04 contract example
+        ]
+        for checked_at, accepted in cases:
+            with self.subTest(checkedAt=checked_at):
+                problems = self.problems(checked_at)
+                if accepted:
+                    self.assertEqual(problems, [], checked_at)
+                else:
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn("is later than the current time", problems[0])
+                    self.assertIn("allowed clock skew 5 minutes", problems[0])
+
+    def test_the_message_names_the_field_the_value_and_the_clock(self) -> None:
+        problems = self.problems("2099-01-01T00:00:00Z")
+        self.assertEqual(
+            problems,
+            [
+                "checkedAt '2099-01-01T00:00:00Z' is later than the current time "
+                "2026-10-21T10:00:00Z (allowed clock skew 5 minutes)"
+            ],
+        )
+
+    def test_fractional_seconds_beyond_microseconds_are_handled(self) -> None:
+        # Nine digits of fraction: the extra digits are truncated downwards,
+        # so the comparison errs on the side of accepting.
+        self.assertEqual(self.problems("2026-10-21T09:59:59.123456789Z"), [])
+        problems = self.problems("2026-10-21T10:05:00.123456789Z")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("is later than the current time", problems[0])
+
+    def test_a_malformed_checked_at_gets_only_the_format_message(self) -> None:
+        for bad in (
+            "2026-10-21",  # a date, not an instant
+            "yesterday",
+            "2026-10-21T23:59:60Z",  # a leap second
+            "2026-13-40T10:00:00Z",  # not a real date
+        ):
+            with self.subTest(bad=bad):
+                problems = self.problems(bad)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertNotIn("is later than the current time", problems[0])
+
+    def test_a_naive_now_is_refused(self) -> None:
+        naive = datetime(2026, 10, 21, 10, 0, 0)
+        with self.assertRaises(ValueError):
+            validate.validate_evidence(
+                self.record("2026-10-21T10:00:00Z"), now=naive
+            )
+
+    def test_the_default_clock_accepts_the_past_and_rejects_the_far_future(self) -> None:
+        # The only test here that reads the real clock: the default path
+        # (now=None) must accept an obviously past date and reject an
+        # obviously future one.
+        past = validate.validate_evidence(
+            self.record("2000-01-01T00:00:00Z"), now=None
+        )
+        self.assertEqual(past, [])
+        problems = validate.validate_evidence(
+            self.record("2999-01-01T00:00:00Z"), now=None
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("is later than the current time", problems[0])
+
+    def test_the_file_helper_judges_the_record_against_the_given_instant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "record.json"
+            path.write_text(
+                json.dumps(self.record("2099-01-01T00:00:00Z")), encoding="utf-8"
+            )
+            report = validate.Report()
+            self.assertIsNone(
+                validate.validate_evidence_file(path, report, now=self.NOW)
+            )
+            self.assertTrue(
+                any("is later than the current time" in e for e in report.errors),
+                report.errors,
+            )
+            # The same file is fine when the record is not in the future.
+            later = datetime(2100, 1, 1, tzinfo=timezone.utc)
+            report = validate.Report()
+            self.assertIsNotNone(
+                validate.validate_evidence_file(path, report, now=later)
+            )
+            self.assertEqual(report.errors, [])
 
 
 class EvidenceCommandLineTests(unittest.TestCase):
@@ -2531,6 +2660,10 @@ class EvidenceCommandLineTests(unittest.TestCase):
     def record(self, **changes) -> dict:
         data = dict(VerificationEvidenceTests.OFFLINE)
         data.update(fixtureId=self.fixture_id, fixtureSha256=self.sha)
+        # A date in the past, so these command-line tests do not depend on
+        # the date they happen to run on: the validator rejects a record
+        # whose checkedAt is in the future (F-115).
+        data.update(checkedAt="2000-01-01T00:00:00Z")
         data.update(changes)
         return data
 
@@ -2580,6 +2713,17 @@ class EvidenceCommandLineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("bad.json", err)
         self.assertIn("requires a network object", err)
+
+    def test_a_future_record_fails_and_only_it_is_named(self) -> None:
+        # Both records are judged against the same instant, read once for the
+        # run, so the past one is valid and only the future one is reported.
+        self.write("past.json", self.record(checkedAt="2000-01-01T00:00:00Z"))
+        self.write("future.json", self.record(checkedAt="2999-01-01T00:00:00Z"))
+        code, out, err = self.run_main("--evidence", str(self.evidence))
+        self.assertEqual(code, 1)
+        self.assertIn("future.json", err)
+        self.assertNotIn("past.json", err)
+        self.assertIn("is later than the current time", err)
 
     def test_unknown_fixture_id_fails(self) -> None:
         path = self.write("ghost.json", self.record(fixtureId="p28-xdr-ghost"))

@@ -44,6 +44,13 @@ text (and evidence JSON read through ``--evidence``) must not contain
 bidirectional, invisible or disallowed control characters, and every
 pack-relative path segment must be a name Windows can create. Both report
 and never rewrite; see CONTRIBUTING.md, "Portable paths and safe text".
+
+A verification record read through ``--evidence`` must also have a
+``checkedAt`` that is not in the future. A verification is made by a person
+or a scheduled job that actually ran the step, so it cannot have happened
+at a later instant; a record dated 2099 would otherwise look "verified"
+for 73 years. A record may be up to five minutes ahead of this run's clock,
+the tolerance for skew between the verifier's machine and this one.
 """
 from __future__ import annotations
 
@@ -60,7 +67,7 @@ import tomllib
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -1822,6 +1829,63 @@ def _check_instant(value: object) -> str | None:
     return None
 
 
+# How far ahead of the validator's clock a ``checkedAt`` may be and still be
+# accepted. The verifier that wrote the record and the validator that reads
+# it are two machines, so their clocks can disagree by a little; five
+# minutes is generous enough for that and short enough that a mistyped year
+# or a deliberately forward-dated record is still rejected.
+CLOCK_SKEW_TOLERANCE_MINUTES = 5
+CLOCK_SKEW_TOLERANCE = timedelta(minutes=CLOCK_SKEW_TOLERANCE_MINUTES)
+
+
+def _parse_instant(value: str) -> datetime:
+    """An RFC 3339 UTC instant as a timezone-aware datetime.
+
+    The value must already have passed :func:`_check_instant`. Fractional
+    seconds beyond microsecond resolution are truncated downwards, so a
+    comparison against ``now`` errs on the side of accepting.
+    """
+    text = value[:-1] if value.endswith("Z") else value
+    head, _, fraction = text.partition(".")
+    if fraction:
+        micros = int(fraction[:6].ljust(6, "0"))
+        parsed = datetime.strptime(head, "%Y-%m-%dT%H:%M:%S").replace(
+            microsecond=micros
+        )
+    else:
+        parsed = datetime.strptime(head, "%Y-%m-%dT%H:%M:%S")
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _format_instant(value: datetime) -> str:
+    """A datetime as an RFC 3339 UTC instant, the form ``checkedAt`` uses."""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _check_not_future(value: str, now: datetime) -> str | None:
+    """Problem with a ``checkedAt`` later than ``now``, or None.
+
+    ``value`` must already have passed :func:`_check_instant`; this check
+    only compares instants. A record may be up to
+    ``CLOCK_SKEW_TOLERANCE`` ahead of ``now`` so that a verifier whose
+    clock runs a little fast does not produce a rejected record.
+
+    ``now`` must be timezone-aware: a naive datetime is refused rather than
+    assumed to be in some time zone.
+    """
+    if not isinstance(now, datetime):
+        raise ValueError("now must be a timezone-aware datetime")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be a timezone-aware datetime")
+    if _parse_instant(value) > now.astimezone(timezone.utc) + CLOCK_SKEW_TOLERANCE:
+        return (
+            f"checkedAt {value!r} is later than the current time "
+            f"{_format_instant(now)} (allowed clock skew "
+            f"{CLOCK_SKEW_TOLERANCE_MINUTES} minutes)"
+        )
+    return None
+
+
 def _check_evidence_ref(value: str) -> str | None:
     if value.startswith("/") or "\\" in value or "\0" in value:
         return "evidenceRef must be a relative path inside the repository"
@@ -1830,7 +1894,7 @@ def _check_evidence_ref(value: str) -> str | None:
     return None
 
 
-def validate_evidence(record: object) -> list[str]:
+def validate_evidence(record: object, now: datetime | None = None) -> list[str]:
     """Return every problem found in one verification record (CF-04 section 3).
 
     An empty list means the record is structurally valid. This checks the
@@ -1838,9 +1902,20 @@ def validate_evidence(record: object) -> list[str]:
     fixture it names exists with the hash that was verified. Nothing here
     decides whether a record is *fresh* (CF-04 section 4); freshness is derived
     elsewhere and never stored.
+
+    ``now`` is the instant the record's ``checkedAt`` is judged against and
+    must be a timezone-aware datetime. A verification is made by a person or
+    a scheduled job that actually ran the step, so it cannot have happened in
+    the future; a ``checkedAt`` beyond the allowed clock skew is rejected.
+    When ``now`` is ``None`` the current time is read here. A caller that
+    judges several records passes the same ``now`` to all of them, so one run
+    cannot compare two records against two clocks.
     """
     if not isinstance(record, dict):
         return ["a verification record must be a JSON object"]
+
+    if now is None:
+        now = datetime.now(timezone.utc)
 
     problems: list[str] = []
     allowed = set(EVIDENCE_REQUIRED_FIELDS) | set(EVIDENCE_OPTIONAL_FIELDS)
@@ -1874,6 +1949,13 @@ def validate_evidence(record: object) -> list[str]:
         instant_problem = _check_instant(record["checkedAt"])
         if instant_problem:
             problems.append(instant_problem)
+        else:
+            # Only an instant the format check accepted is compared with the
+            # clock, so a malformed value is reported once, with the format
+            # message alone.
+            future_problem = _check_not_future(record["checkedAt"], now)
+            if future_problem:
+                problems.append(future_problem)
 
     if "outcome" in record and record["outcome"] not in EVIDENCE_OUTCOMES:
         problems.append(f"outcome must be one of {list(EVIDENCE_OUTCOMES)}")
@@ -1933,8 +2015,14 @@ def validate_evidence(record: object) -> list[str]:
     return problems
 
 
-def validate_evidence_file(path: Path, report: Report) -> dict | None:
-    """Parse one evidence file and report its problems. Returns the record."""
+def validate_evidence_file(
+    path: Path, report: Report, now: datetime | None = None
+) -> dict | None:
+    """Parse one evidence file and report its problems. Returns the record.
+
+    ``now`` is the instant the record's ``checkedAt`` is judged against; see
+    :func:`validate_evidence`.
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
@@ -1946,7 +2034,7 @@ def validate_evidence_file(path: Path, report: Report) -> dict | None:
     except json.JSONDecodeError as error:
         report.error(path, f"not valid JSON: {error}")
         return None
-    problems = validate_evidence(record)
+    problems = validate_evidence(record, now=now)
     for problem in problems:
         report.error(path, problem)
     return record if not problems else None
@@ -2113,8 +2201,12 @@ def main(argv: list[str]) -> int:
         evidence_files.extend(find_evidence_files(target))
     if evidence_files:
         hashes = fixture_hashes([r for r in roots if r.is_dir()])
+        # One clock for the whole run: every record is judged against the
+        # same instant, so two records cannot disagree because the run
+        # straddled a second boundary.
+        now = datetime.now(timezone.utc)
         for path in evidence_files:
-            record = validate_evidence_file(path, combined)
+            record = validate_evidence_file(path, combined, now=now)
             if record is not None:
                 check_evidence_against_fixtures(path, record, hashes, combined)
 

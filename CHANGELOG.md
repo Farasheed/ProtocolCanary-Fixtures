@@ -383,6 +383,21 @@ discussion and diff. New entries must include that link; see
 
 ### Changed
 
+- `tools/validate/validate.py` now rejects a verification record whose `checkedAt` is in
+  the future. The instant was checked for being a real RFC 3339 UTC value, but never
+  compared with the clock, so a record dated 2099 was accepted and — because the
+  freshness states of CF-04 section 4 are derived from `checkedAt` — would look
+  "verified" for 73 years, and a record dated tomorrow could never go stale on
+  schedule. `validate_evidence()` and `validate_evidence_file()` take an optional
+  timezone-aware `now`; when it is not given, the current time is read once per run and
+  the same instant is used for every record, so one run cannot judge two records
+  against two clocks. A record may be up to five minutes ahead of the validator's
+  clock, the documented tolerance for skew between the verifier's machine and the
+  validator's. A malformed `checkedAt` still produces only the existing format
+  message, and `capturedAt` in the Protocol 29 captures is unchanged. Closes
+  [issue #397](https://github.com/StellarCanary/ProtocolCanary-Fixtures/issues/397).
+  ([PR #XXX])
+
 - `tools/pack/verify_archive.py --manifest` now checks the facts the manifest states about
   the archive, and not only its archive hash and pack digest. The file name, the size, the
   entry count, the uncompressed bytes, the version in the file name, the pack name, the
